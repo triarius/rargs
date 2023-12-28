@@ -1,14 +1,15 @@
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::borrow::Cow;
-use std::cmp::max;
-use std::collections::HashMap;
-use std::convert::From;
-use std::io::{self, BufRead};
-use std::process::{Command, Stdio};
-use std::sync::Arc;
-use structopt::clap::AppSettings;
-use structopt::StructOpt;
+use std::{
+    borrow::Cow,
+    cmp::max,
+    collections::HashMap,
+    convert::From,
+    io::{self, BufRead},
+    process::{Command, Stdio},
+    sync::Arc,
+};
+use structopt::{clap::AppSettings, StructOpt};
 use threadpool::ThreadPool;
 
 const CONTEXT_KEY_LINENUM: &str = "LINENUM";
