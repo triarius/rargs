@@ -255,19 +255,14 @@ impl<'a> RegexContext<'a> {
         map.insert("".to_string(), Cow::Borrowed(content));
         map.insert("0".to_string(), Cow::Borrowed(content));
 
-        let group_names = pattern
-            .capture_names()
-            .filter_map(|x| x)
-            .collect::<Vec<&str>>();
+        let group_names = pattern.capture_names().flatten().collect::<Vec<&str>>();
 
         let mut groups = vec![];
 
         for caps in pattern.captures_iter(content) {
             // the numbered group
-            for mat_wrapper in caps.iter().skip(1) {
-                if let Some(mat) = mat_wrapper {
-                    groups.push(Cow::Borrowed(mat.as_str()));
-                }
+            for mat in caps.iter().skip(1).flatten() {
+                groups.push(Cow::Borrowed(mat.as_str()));
             }
 
             // the named group
@@ -308,7 +303,7 @@ impl<'a> RegexContext<'a> {
 
 impl<'a> Context<'a> for RegexContext<'a> {
     fn get_by_name(&'a self, group_name: &str) -> Option<Cow<'a, str>> {
-        self.map.get(group_name).map(|c| c.clone())
+        self.map.get(group_name).cloned()
     }
 
     fn get_by_range(&'a self, range: &Range, sep: Option<&str>) -> Option<Cow<'a, str>> {
@@ -317,13 +312,12 @@ impl<'a> Context<'a> for RegexContext<'a> {
                 let num = self.translate_neg_index(num);
 
                 if num == 0 {
-                    return self.map.get("").map(|c| c.clone());
+                    self.map.get("").cloned()
                 } else if num > self.groups.len() {
-                    return None;
+                    None
+                } else {
+                    Some(self.groups[num - 1].clone())
                 }
-
-                let x = Some(self.groups[num - 1].clone());
-                return x;
             }
 
             Both(left, right) => {
@@ -492,18 +486,15 @@ impl ArgFragment {
             let opt_left = caps.name("left").map(|s| s.as_str().parse().unwrap_or(1));
             let opt_right = caps.name("right").map(|s| s.as_str().parse().unwrap_or(-1));
 
-            if opt_left.is_none() && opt_right.is_none() {
-                return SplitRangeGroup(Inf());
-            } else if opt_left.is_none() {
-                return SplitRangeGroup(LeftInf(opt_right.unwrap()));
-            } else if opt_right.is_none() {
-                return SplitRangeGroup(RightInf(opt_left.unwrap()));
-            } else {
-                return SplitRangeGroup(Both(opt_left.unwrap(), opt_right.unwrap()));
-            }
+            return match (opt_left, opt_right) {
+                (None, None) => SplitRangeGroup(Inf()),
+                (None, Some(right)) => SplitRangeGroup(LeftInf(right)),
+                (Some(left), None) => SplitRangeGroup(RightInf(left)),
+                (Some(left), Some(right)) => SplitRangeGroup(Both(left, right)),
+            };
         }
 
-        return Literal(field_string.to_string());
+        Literal(field_string.to_string())
     }
 }
 
