@@ -1,4 +1,4 @@
-extern crate assert_cli;
+use assert_cli;
 
 static RARGS: &'static str = "./target/release/rargs";
 
@@ -33,7 +33,7 @@ fn test_regex_group_name_should_match() {
 }
 
 #[test]
-fn test_negtive_regex_group_should_work() {
+fn test_negative_regex_group_should_work() {
     assert_cli::Assert::command(&[
         RARGS,
         "-p",
@@ -213,5 +213,43 @@ fn test_start_num_should_be_working() {
         .stdin("line 1\nline 2")
         .stdout()
         .is("10 line 1\n11 line 2")
+        .unwrap();
+}
+
+#[test]
+fn test_range_argc() {
+    assert_cli::Assert::command(&[RARGS, "sh", "-c", "echo $#", "sh", "{..}"])
+        .stdin("1 2 3")
+        .stdout()
+        .is("1")
+        .unwrap();
+}
+
+#[test]
+fn test_split_range_argc() {
+    assert_cli::Assert::command(&[RARGS, "sh", "-c", "echo $#", "sh{...}"])
+        .stdin("1 2 3")
+        .stderr()
+        .is("")
+        .stdout()
+        .is("3")
+        .unwrap();
+}
+
+#[test]
+fn test_split_range() {
+    assert_cli::Assert::command(&[RARGS, "echo", "{...}"])
+        .stdin("1 2 3")
+        .stdout()
+        .is("1 2 3")
+        .unwrap();
+}
+
+#[test]
+fn test_range_and_split_range() {
+    assert_cli::Assert::command(&[RARGS, "echo", "{..}{...}"])
+        .stdin("1 2 3")
+        .stdout()
+        .is("1 2 3 1 2 3")
         .unwrap();
 }

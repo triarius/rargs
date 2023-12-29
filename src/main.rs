@@ -418,7 +418,7 @@ impl<'a> Context<'a> for RegexContext<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Range {
     Single(i32),
     Both(i32, i32),
@@ -429,7 +429,7 @@ enum Range {
 
 use Range::*;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum ArgFragment {
     Literal(String),
     NamedGroup(String),
@@ -471,15 +471,12 @@ impl ArgFragment {
             let opt_right = caps.name("right").map(|s| s.as_str().parse().unwrap_or(-1));
             let opt_sep = caps.name("sep").map(|s| s.as_str().to_string());
 
-            if opt_left.is_none() && opt_right.is_none() {
-                return RangeGroup(Inf(), opt_sep);
-            } else if opt_left.is_none() {
-                return RangeGroup(LeftInf(opt_right.unwrap()), opt_sep);
-            } else if opt_right.is_none() {
-                return RangeGroup(RightInf(opt_left.unwrap()), opt_sep);
-            } else {
-                return RangeGroup(Both(opt_left.unwrap(), opt_right.unwrap()), opt_sep);
-            }
+            return match (opt_left, opt_right) {
+                (None, None) => RangeGroup(Inf(), opt_sep),
+                (None, Some(right)) => RangeGroup(LeftInf(right), opt_sep),
+                (Some(left), None) => RangeGroup(RightInf(left), opt_sep),
+                (Some(left), Some(right)) => RangeGroup(Both(left, right), opt_sep),
+            };
         }
 
         let opt_caps = FIELD_SPLIT_RANGE.captures(field_string);
@@ -524,26 +521,97 @@ impl<'a> From<&'a str> for ArgTemplate {
 
 impl<'a> ArgTemplate {
     fn apply_context<T: Context<'a>>(&self, context: &'a T) -> Vec<String> {
+        #[derive(Debug, Clone)]
+        enum Join {
+            Literal(String),
+            NamedGroup(String),
+            RangeGroup(Range, Option<String>),
+        }
+
+        #[derive(Debug, Clone)]
+        struct Split(Range);
+
+        #[derive(Debug, Clone)]
+        enum Combination {
+            Join(Vec<Join>),
+            Split(Split),
+        }
+
         self.fragments
             .iter()
-            .flat_map(|fragment| match *fragment {
-                Literal(ref literal) => vec![Cow::Borrowed(literal.as_str())],
-                NamedGroup(ref name) => {
-                    context.get_by_name(name).map_or_else(Vec::new, |c| vec![c])
-                }
-                RangeGroup(ref range, ref opt_sep) => context
-                    .get_by_range(range, opt_sep.as_ref().map(String::as_str))
-                    .map_or_else(Vec::new, |c| vec![c]),
-                SplitRangeGroup(ref range) => context.get_by_split_range(range),
+            .fold(vec![], |mut acc: Vec<Combination>, e| {
+                let mut tail = match acc.pop() {
+                    None => match e {
+                        Literal(s) => vec![Combination::Join(vec![Join::Literal(s.clone())])],
+                        NamedGroup(s) => vec![Combination::Join(vec![Join::NamedGroup(s.clone())])],
+                        RangeGroup(r, s) => vec![Combination::Join(vec![Join::RangeGroup(
+                            r.clone(),
+                            s.clone(),
+                        )])],
+                        SplitRangeGroup(r) => vec![Combination::Split(Split(r.clone()))],
+                    },
+                    Some(last) => match (last, e) {
+                        (last, SplitRangeGroup(r)) => {
+                            vec![last, Combination::Split(Split(r.clone()))]
+                        }
+                        (Combination::Join(mut joins), Literal(s)) => {
+                            joins.push(Join::Literal(s.clone()));
+                            vec![Combination::Join(joins)]
+                        }
+                        (Combination::Join(mut joins), NamedGroup(s)) => {
+                            joins.push(Join::NamedGroup(s.clone()));
+                            vec![Combination::Join(joins)]
+                        }
+                        (Combination::Join(mut joins), RangeGroup(r, s)) => {
+                            joins.push(Join::RangeGroup(r.clone(), s.clone()));
+                            vec![Combination::Join(joins)]
+                        }
+                        (last, Literal(s)) => {
+                            if s.is_empty() {
+                                vec![last]
+                            } else {
+                                vec![last, Combination::Join(vec![Join::Literal(s.clone())])]
+                            }
+                        }
+                        (last, NamedGroup(s)) => {
+                            vec![last, Combination::Join(vec![Join::NamedGroup(s.clone())])]
+                        }
+                        (last, RangeGroup(r, s)) => {
+                            vec![
+                                last,
+                                Combination::Join(vec![Join::RangeGroup(r.clone(), s.clone())]),
+                            ]
+                        }
+                    },
+                };
+
+                acc.append(&mut tail);
+
+                acc
             })
-            .filter_map(|c| {
-                let s = c.into_owned();
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s)
+            .iter()
+            .flat_map(|combination| match combination {
+                Combination::Join(joins) => {
+                    let joined = joins
+                        .iter()
+                        .flat_map(|join| match join {
+                            Join::Literal(ref literal) => vec![Cow::Borrowed(literal.as_str())],
+                            Join::NamedGroup(ref name) => {
+                                context.get_by_name(name).map_or_else(Vec::new, |c| vec![c])
+                            }
+                            Join::RangeGroup(ref range, ref opt_sep) => context
+                                .get_by_range(range, opt_sep.as_ref().map(String::as_str))
+                                .map_or_else(Vec::new, |c| vec![c]),
+                        })
+                        .collect::<String>();
+                    vec![joined]
                 }
+                Combination::Split(Split(ref range)) => context
+                    .get_by_split_range(range)
+                    .iter()
+                    .map(|s| s.as_ref().to_owned())
+                    .collect::<Vec<String>>(),
             })
-            .collect()
+            .collect::<Vec<String>>()
     }
 }
