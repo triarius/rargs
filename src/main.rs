@@ -519,99 +519,116 @@ impl<'a> From<&'a str> for ArgTemplate {
     }
 }
 
+#[derive(Debug, Clone)]
+enum Join {
+    Literal(String),
+    NamedGroup(String),
+    RangeGroup(Range, Option<String>),
+}
+
+#[derive(Debug, Clone)]
+struct Split(Range);
+
+#[derive(Debug, Clone)]
+enum Combination {
+    Join(Vec<Join>),
+    Split(Split),
+}
+
 impl<'a> ArgTemplate {
     fn apply_context<T: Context<'a>>(&self, context: &'a T) -> Vec<String> {
-        #[derive(Debug, Clone)]
-        enum Join {
-            Literal(String),
-            NamedGroup(String),
-            RangeGroup(Range, Option<String>),
-        }
-
-        #[derive(Debug, Clone)]
-        struct Split(Range);
-
-        #[derive(Debug, Clone)]
-        enum Combination {
-            Join(Vec<Join>),
-            Split(Split),
-        }
-
-        self.fragments
-            .iter()
-            .fold(vec![], |mut acc: Vec<Combination>, e| {
-                let mut tail = match acc.pop() {
-                    None => match e {
-                        Literal(s) => vec![Combination::Join(vec![Join::Literal(s.clone())])],
-                        NamedGroup(s) => vec![Combination::Join(vec![Join::NamedGroup(s.clone())])],
-                        RangeGroup(r, s) => vec![Combination::Join(vec![Join::RangeGroup(
-                            r.clone(),
-                            s.clone(),
-                        )])],
-                        SplitRangeGroup(r) => vec![Combination::Split(Split(r.clone()))],
-                    },
-                    Some(last) => match (last, e) {
-                        (last, SplitRangeGroup(r)) => {
-                            vec![last, Combination::Split(Split(r.clone()))]
-                        }
-                        (Combination::Join(mut joins), Literal(s)) => {
-                            joins.push(Join::Literal(s.clone()));
-                            vec![Combination::Join(joins)]
-                        }
-                        (Combination::Join(mut joins), NamedGroup(s)) => {
-                            joins.push(Join::NamedGroup(s.clone()));
-                            vec![Combination::Join(joins)]
-                        }
-                        (Combination::Join(mut joins), RangeGroup(r, s)) => {
-                            joins.push(Join::RangeGroup(r.clone(), s.clone()));
-                            vec![Combination::Join(joins)]
-                        }
-                        (last, Literal(s)) => {
-                            if s.is_empty() {
-                                vec![last]
-                            } else {
-                                vec![last, Combination::Join(vec![Join::Literal(s.clone())])]
-                            }
-                        }
-                        (last, NamedGroup(s)) => {
-                            vec![last, Combination::Join(vec![Join::NamedGroup(s.clone())])]
-                        }
-                        (last, RangeGroup(r, s)) => {
-                            vec![
-                                last,
-                                Combination::Join(vec![Join::RangeGroup(r.clone(), s.clone())]),
-                            ]
-                        }
-                    },
-                };
-
-                acc.append(&mut tail);
-
-                acc
-            })
-            .iter()
-            .flat_map(|combination| match combination {
-                Combination::Join(joins) => {
-                    let joined = joins
-                        .iter()
-                        .flat_map(|join| match join {
-                            Join::Literal(ref literal) => vec![Cow::Borrowed(literal.as_str())],
-                            Join::NamedGroup(ref name) => {
-                                context.get_by_name(name).map_or_else(Vec::new, |c| vec![c])
-                            }
-                            Join::RangeGroup(ref range, ref opt_sep) => context
-                                .get_by_range(range, opt_sep.as_ref().map(String::as_str))
-                                .map_or_else(Vec::new, |c| vec![c]),
-                        })
-                        .collect::<String>();
-                    vec![joined]
-                }
-                Combination::Split(Split(ref range)) => context
-                    .get_by_split_range(range)
-                    .iter()
-                    .map(|s| s.as_ref().to_owned())
-                    .collect::<Vec<String>>(),
-            })
-            .collect::<Vec<String>>()
+        let combinations = group_combinations(self.fragments.iter());
+        combine_with_context(context, combinations.iter())
     }
+}
+
+/// Combine elements, splitting or joining the args as needed.
+fn combine_with_context<'a, 'b, T: Context<'a>>(
+    context: &'a T,
+    combinations: impl Iterator<Item = &'b Combination>,
+) -> Vec<String> {
+    combinations
+        .flat_map(|combination| match combination {
+            Combination::Join(joins) => {
+                let joined = joins
+                    .iter()
+                    .flat_map(|join| match join {
+                        Join::Literal(ref literal) => vec![Cow::Borrowed(literal.as_str())],
+                        Join::NamedGroup(ref name) => {
+                            context.get_by_name(name).map_or_else(Vec::new, |c| vec![c])
+                        }
+                        Join::RangeGroup(ref range, ref opt_sep) => context
+                            .get_by_range(range, opt_sep.as_ref().map(String::as_str))
+                            .map_or_else(Vec::new, |c| vec![c]),
+                    })
+                    .collect::<String>();
+                vec![joined]
+            }
+            Combination::Split(Split(ref range)) => context
+                .get_by_split_range(range)
+                .iter()
+                .map(|s| s.as_ref().to_owned())
+                .collect::<Vec<String>>(),
+        })
+        .collect()
+}
+
+/// Group the args by whether they should be split or joined in the output
+fn group_combinations<'a>(fragments: impl Iterator<Item = &'a ArgFragment>) -> Vec<Combination> {
+    fragments.fold(vec![], |mut acc: Vec<Combination>, e| {
+        let mut tail = match acc.pop() {
+            None => match e {
+                Literal(s) => {
+                    if s.is_empty() {
+                        vec![]
+                    } else {
+                        vec![Combination::Join(vec![Join::Literal(s.clone())])]
+                    }
+                }
+                NamedGroup(s) => vec![Combination::Join(vec![Join::NamedGroup(s.clone())])],
+                RangeGroup(r, s) => vec![Combination::Join(vec![Join::RangeGroup(
+                    r.clone(),
+                    s.clone(),
+                )])],
+                SplitRangeGroup(r) => vec![Combination::Split(Split(r.clone()))],
+            },
+            Some(last) => match (last, e) {
+                (last, SplitRangeGroup(r)) => {
+                    vec![last, Combination::Split(Split(r.clone()))]
+                }
+                (Combination::Join(mut joins), Literal(s)) => {
+                    joins.push(Join::Literal(s.clone()));
+                    vec![Combination::Join(joins)]
+                }
+                (Combination::Join(mut joins), NamedGroup(s)) => {
+                    joins.push(Join::NamedGroup(s.clone()));
+                    vec![Combination::Join(joins)]
+                }
+                (Combination::Join(mut joins), RangeGroup(r, s)) => {
+                    joins.push(Join::RangeGroup(r.clone(), s.clone()));
+                    vec![Combination::Join(joins)]
+                }
+                (last, Literal(s)) => {
+                    if s.is_empty() {
+                        vec![last]
+                    } else {
+                        vec![last, Combination::Join(vec![Join::Literal(s.clone())])]
+                    }
+                }
+                (last, NamedGroup(s)) => {
+                    vec![last, Combination::Join(vec![Join::NamedGroup(s.clone())])]
+                }
+                (last, RangeGroup(r, s)) => {
+                    vec![
+                        last,
+                        Combination::Join(vec![Join::RangeGroup(r.clone(), s.clone())]),
+                    ]
+                }
+            },
+        };
+
+        acc.append(&mut tail);
+
+        acc
+    })
 }

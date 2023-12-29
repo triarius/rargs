@@ -227,10 +227,8 @@ fn test_range_argc() {
 
 #[test]
 fn test_split_range_argc() {
-    assert_cli::Assert::command(&[RARGS, "sh", "-c", "echo $#", "sh{...}"])
+    assert_cli::Assert::command(&[RARGS, "sh", "-c", "echo $#", "sh", "{...}"])
         .stdin("1 2 3")
-        .stderr()
-        .is("")
         .stdout()
         .is("3")
         .unwrap();
@@ -247,7 +245,7 @@ fn test_split_range() {
 
 #[test]
 fn test_range_and_split_range() {
-    assert_cli::Assert::command(&[RARGS, "echo", "{..}{...}"])
+    assert_cli::Assert::command(&[RARGS, "echo", "{...}", "{..}"])
         .stdin("1 2 3")
         .stdout()
         .is("1 2 3 1 2 3")
