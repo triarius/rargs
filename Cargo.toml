@@ -12,7 +12,7 @@ license = "MIT"
 edition = "2018"
 
 [dependencies]
-regex = "1.10.6"
+regex = "1.11.1"
 structopt = "0.3.26"
 lazy_static = "1.5.0"
 num_cpus = "1.16.0"
